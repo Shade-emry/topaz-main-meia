@@ -87,11 +87,28 @@ void Sensor::printDebugTemperatureCalibrationState() {
 	printTemperatureCalibrationUnsupported();
 };
 void Sensor::saveTemperatureCalibration() { printTemperatureCalibrationUnsupported(); };
+void Sensor::startTemperatureCalibration() {
+	printTemperatureCalibrationUnsupported();
+};
+void Sensor::stopTemperatureCalibration() {
+	printTemperatureCalibrationUnsupported();
+};
+void Sensor::setBackgroundTemperatureCalibration(bool) {
+	printTemperatureCalibrationUnsupported();
+};
+void Sensor::clearTemperatureCalibration() {
+	printTemperatureCalibrationUnsupported();
+};
 void Sensor::resetTemperatureCalibrationState() {
 	printTemperatureCalibrationUnsupported();
 };
 
 const char* Sensor::getAttachedMagnetometer() const { return nullptr; }
+bool Sensor::hasEnabledMagnetometer() const { return false; }
+void Sensor::setMagneticReference(float, float) {}
+void Sensor::clearMagneticReference() {}
+void Sensor::beginStartupCalibration() {}
+bool Sensor::isStartupReady() const { return true; }
 
 SlimeVR::Configuration::SensorConfigBits Sensor::getSensorConfigData() {
 	return SlimeVR::Configuration::SensorConfigBits{

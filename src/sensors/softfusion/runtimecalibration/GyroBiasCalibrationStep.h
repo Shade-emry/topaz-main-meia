@@ -51,6 +51,10 @@ public:
 			< gyroBiasCalibrationSeconds * 1e3) {
 			return TickResult::CONTINUE;
 		}
+		if (calibrationData.value().sampleCount == 0) {
+			calibrationData.value().startMillis = millis();
+			return TickResult::CONTINUE;
+		}
 
 		float gyroOffsetX = calibrationData.value().gyroSums[0]
 						  / static_cast<float>(calibrationData.value().sampleCount);

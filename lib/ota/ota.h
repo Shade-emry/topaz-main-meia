@@ -24,8 +24,6 @@
 #ifndef _OTA_H_
 #define _OTA_H 1
 
-#include <ArduinoOTA.h>
-
 namespace OTA {
     void otaSetup(const char * const otaPassword);
     void otaUpdate();

@@ -30,7 +30,7 @@
 #define BNO_USE_ARVR_STABILIZATION \
 	true  // Set to false to disable stabilization for BNO085+ IMUs
 #define USE_6_AXIS \
-	true  // uses 9 DoF (with mag) if false (only for ICM-20948 and BNO0xx currently)
+	false  // Use the calibrated magnetometer path when available
 #define LOAD_BIAS true  // Loads the bias values from NVS on start
 #define SAVE_BIAS true  // Periodically saves bias calibration data to NVS
 #define BIAS_DEBUG false  // Printing BIAS Variables to serial (ICM20948 only)
@@ -39,7 +39,35 @@
 		   // disable if problems. Server does nothing with value so disabled atm
 #define SEND_ACCELERATION true  // send linear acceleration to the server
 
-#define EXT_SERIAL_COMMANDS false  // Set to true to enable extra serial debug commands
+#define EXT_SERIAL_COMMANDS true  // Enable calibration and diagnostics commands
+
+#define WMM_MODE_OFF 0
+#define WMM_MODE_MONITOR 1
+#define WMM_MODE_ON 2
+#ifndef ENABLE_WMM
+#define ENABLE_WMM true
+#endif
+#ifndef ENABLE_WMMHR
+#define ENABLE_WMMHR true
+#endif
+#ifndef ENABLE_WMM_STANDARD_FALLBACK
+#define ENABLE_WMM_STANDARD_FALLBACK true
+#endif
+#ifndef WMM_DEFAULT_MODE
+#define WMM_DEFAULT_MODE WMM_MODE_MONITOR
+#endif
+
+#ifndef ENABLE_GYRO_TEMP_CURVE
+#define ENABLE_GYRO_TEMP_CURVE true
+#endif
+
+#ifndef ENABLE_VR_MAG_REJECTION
+#define ENABLE_VR_MAG_REJECTION true
+#endif
+
+#ifndef ENABLE_TRUE_NORTH_CORRECTION
+#define ENABLE_TRUE_NORTH_CORRECTION false
+#endif
 
 // Debug information
 
@@ -112,6 +140,10 @@
 
 #ifndef USE_OTA_TIMEOUT
 #define USE_OTA_TIMEOUT false
+#endif
+
+#ifndef USE_OTA
+#define USE_OTA false
 #endif
 
 #endif  // SLIMEVR_DEBUG_H_

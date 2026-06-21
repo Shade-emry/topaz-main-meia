@@ -98,6 +98,19 @@ struct RuntimeCalibrationSensorConfig {
 
 	bool accelCalibrated[3];
 	float A_off[3];
+	float A_scale[3];
+	bool accelSideCalibrated[6];
+	float accelSideAverage[6];
+
+	// Per-sensor mounting orientation. Each descriptor is a signed permutation
+	// of X/Y/Z; see sensors/axisremap.h.
+	uint16_t imuAxisRemap;
+	uint16_t magAxisRemap;
+
+	// Magnetometer hard-iron offset and soft-iron correction matrix.
+	bool magCalibrated;
+	float M_B[3];
+	float M_Ainv[3][3];
 };
 
 struct MPU6050SensorConfig {

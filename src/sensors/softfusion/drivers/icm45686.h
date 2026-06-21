@@ -31,15 +31,20 @@ namespace SlimeVR::Sensors::SoftFusion::Drivers {
 // Driver uses acceleration range at 32g
 // and gyroscope range at 4000dps
 // using high resolution mode
-// Uses 32.768kHz clock
-// Gyroscope ODR = 204.8Hz, accel ODR = 102.4Hz
-// Timestamps reading not used, as they're useless (constant predefined increment)
+// Uses the internal clock
+// Gyroscope ODR = 400Hz, accel ODR = 400Hz
+// FIFO timestamps are consumed by ICM45Base and passed through to VQF.
 
 struct ICM45686 : public ICM45Base {
 	static constexpr auto Name = "ICM-45686";
 	static constexpr auto Type = SensorTypeID::ICM45686;
 
-	static constexpr VQFParams SensorVQFParams{};
+	static constexpr VQFParams SensorVQFParams{
+		.tauMag = 30.0f,
+		.magMinUndisturbedTime = 5.0f,
+		.magRejectPersistent = ENABLE_VR_MAG_REJECTION,
+		.magMaxCorrectionRate = 0.20f,
+	};
 
 	ICM45686(RegisterInterface& registerInterface, SlimeVR::Logging::Logger& logger)
 		: ICM45Base{registerInterface, logger} {}
@@ -52,21 +57,98 @@ struct ICM45686 : public ICM45Base {
 
 		struct Pin9Config {
 			static constexpr uint8_t reg = 0x31;
+			static constexpr uint8_t mask = 0b00000111;
 			static constexpr uint8_t value = 0b00000110;  // pin 9 to clkin
 		};
 
 		struct RtcConfig {
 			static constexpr uint8_t reg = 0x26;
-			static constexpr uint8_t value = 0b00100011;  // enable RTC
+			static constexpr uint8_t enable = 0b00100000;
+		};
+
+		struct SifsI3CStcConfig {
+			static constexpr BaseRegs::Bank bank = BaseRegs::Bank::IPregTop1;
+			static constexpr uint8_t reg = 0x68;
+			static constexpr uint8_t modeMask = (0b1 << 2);
+		};
+
+		struct AccelSourceControl {
+			static constexpr BaseRegs::Bank bank = BaseRegs::Bank::IPregSys2;
+			static constexpr uint8_t reg = 0x7b;
+			static constexpr uint8_t mask = 0b00000011;
+			static constexpr uint8_t firOnly = 0b00000001;
+			static constexpr uint8_t interpolatorAndFir = 0b00000010;
+		};
+
+		struct GyroSourceControl {
+			static constexpr BaseRegs::Bank bank = BaseRegs::Bank::IPregSys1;
+			static constexpr uint8_t reg = 0xa6;
+			static constexpr uint8_t mask = 0b01100000;
+			static constexpr uint8_t firOnly = 0b00100000;
+			static constexpr uint8_t interpolatorAndFir = 0b01000000;
+		};
+
+		struct GyroUiLpfBandwidth {
+			static constexpr BaseRegs::Bank bank = BaseRegs::Bank::IPregSys1;
+			static constexpr uint8_t reg = 0xac;
+			static constexpr uint8_t mask = 0b00000111;
+			static constexpr uint8_t odrDiv4 = 0b00000001;
+		};
+
+		struct AccelUiLpfBandwidth {
+			static constexpr BaseRegs::Bank bank = BaseRegs::Bank::IPregSys2;
+			static constexpr uint8_t reg = 0x83;
+			static constexpr uint8_t mask = 0b00000111;
+			static constexpr uint8_t odrDiv4 = 0b00000001;
 		};
 	};
 
 	bool initialize() {
 		ICM45Base::softResetIMU();
 #if IMU_USE_EXTERNAL_CLOCK
-		m_RegisterInterface.writeReg(Regs::Pin9Config::reg, Regs::Pin9Config::value);
-		m_RegisterInterface.writeReg(Regs::RtcConfig::reg, Regs::RtcConfig::value);
+		uint8_t pinConfig = m_RegisterInterface.readReg(Regs::Pin9Config::reg);
+		pinConfig = (pinConfig & ~Regs::Pin9Config::mask) | Regs::Pin9Config::value;
+		m_RegisterInterface.writeReg(Regs::Pin9Config::reg, pinConfig);
+
+		uint8_t i3cStc = readBankRegister<typename Regs::SifsI3CStcConfig>();
+		i3cStc &= ~Regs::SifsI3CStcConfig::modeMask;
+		writeBankRegister<typename Regs::SifsI3CStcConfig>(i3cStc);
+
+		uint8_t accelSource = readBankRegister<typename Regs::AccelSourceControl>();
+		accelSource = (accelSource & ~Regs::AccelSourceControl::mask)
+					| Regs::AccelSourceControl::interpolatorAndFir;
+		writeBankRegister<typename Regs::AccelSourceControl>(accelSource);
+
+		uint8_t gyroSource = readBankRegister<typename Regs::GyroSourceControl>();
+		gyroSource = (gyroSource & ~Regs::GyroSourceControl::mask)
+				   | Regs::GyroSourceControl::interpolatorAndFir;
+		writeBankRegister<typename Regs::GyroSourceControl>(gyroSource);
+
+		uint8_t rtcConfig = m_RegisterInterface.readReg(Regs::RtcConfig::reg);
+		rtcConfig |= Regs::RtcConfig::enable;
+		m_RegisterInterface.writeReg(Regs::RtcConfig::reg, rtcConfig);
+#else
+		uint8_t accelSource = readBankRegister<typename Regs::AccelSourceControl>();
+		accelSource = (accelSource & ~Regs::AccelSourceControl::mask)
+					| Regs::AccelSourceControl::firOnly;
+		writeBankRegister<typename Regs::AccelSourceControl>(accelSource);
+
+		uint8_t gyroSource = readBankRegister<typename Regs::GyroSourceControl>();
+		gyroSource = (gyroSource & ~Regs::GyroSourceControl::mask)
+				   | Regs::GyroSourceControl::firOnly;
+		writeBankRegister<typename Regs::GyroSourceControl>(gyroSource);
 #endif
+
+		uint8_t gyroLpf = readBankRegister<typename Regs::GyroUiLpfBandwidth>();
+		gyroLpf = (gyroLpf & ~Regs::GyroUiLpfBandwidth::mask)
+				| Regs::GyroUiLpfBandwidth::odrDiv4;
+		writeBankRegister<typename Regs::GyroUiLpfBandwidth>(gyroLpf);
+
+		uint8_t accelLpf = readBankRegister<typename Regs::AccelUiLpfBandwidth>();
+		accelLpf = (accelLpf & ~Regs::AccelUiLpfBandwidth::mask)
+				 | Regs::AccelUiLpfBandwidth::odrDiv4;
+		writeBankRegister<typename Regs::AccelUiLpfBandwidth>(accelLpf);
+
 		return ICM45Base::initializeBase();
 	}
 };

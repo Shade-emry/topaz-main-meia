@@ -323,14 +323,6 @@
 						"rotation": "DEG_270",
 						"scl": "4",
 						"sda": "5"
-					},
-					{
-						"protocol": "I2C",
-						"imu": "IMU_ICM45686",
-						"int": "8",
-						"rotation": "DEG_270",
-						"scl": "4",
-						"sda": "5"
 					}
 				],
 				"BATTERY": {

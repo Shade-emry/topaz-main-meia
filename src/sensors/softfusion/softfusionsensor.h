@@ -114,7 +114,7 @@ class SoftFusionSensor : public Sensor {
 
 		calibrator.scaleAccelSample(accelData);
 
-		m_fusion.updateAcc(accelData, calibrator.getAccelTimestep());
+		m_fusion.updateAcc(accelData, timeDelta);
 
 		calibrator.provideAccelSample(xyz);
 	}
@@ -125,9 +125,24 @@ class SoftFusionSensor : public Sensor {
 			   static_cast<sensor_real_t>(xyz[1]),
 			   static_cast<sensor_real_t>(xyz[2])};
 		calibrator.scaleGyroSample(gyroData);
-		m_fusion.updateGyro(gyroData, calibrator.getGyroTimestep());
+		m_fusion.updateGyro(gyroData, timeDelta);
 
 		calibrator.provideGyroSample(xyz);
+	}
+
+	void processMagSample(const RawSensorT xyz[3], const sensor_real_t timeDelta) {
+		sensor_real_t magData[]{
+			static_cast<sensor_real_t>(xyz[0]),
+			static_cast<sensor_real_t>(xyz[1]),
+			static_cast<sensor_real_t>(xyz[2]),
+		};
+		calibrator.scaleMagSample(magData);
+		const sensor_real_t microTeslaPerLsb = magDriver.getMicroTeslaPerLsb();
+		for (size_t axis = 0; axis < 3; axis++) {
+			magData[axis] *= microTeslaPerLsb;
+		}
+		m_fusion.updateMag(magData, timeDelta);
+		calibrator.provideMagSample(xyz);
 	}
 
 	void
@@ -142,7 +157,7 @@ class SoftFusionSensor : public Sensor {
 			if (toggles.getToggle(SensorToggles::TempGradientCalibrationEnabled)) {
 				tempGradientCalculator.feedSample(
 					lastReadTemperature,
-					calibrator.getTempTimestep()
+					timeDelta
 				);
 			}
 
@@ -251,6 +266,9 @@ public:
 				[&](int16_t sample, float TempTs) {
 					processTempSample(sample, TempTs);
 				},
+				[&](const auto sample[3], float MagTs) {
+					processMagSample(sample, MagTs);
+				},
 			});
 			if (overwhelmed) {
 				calibrator.signalOverwhelmed();
@@ -329,27 +347,36 @@ public:
 		m_status = SensorStatus::SENSOR_OK;
 		working = true;
 
-		calibrator.checkStartupCalibration();
-
 		if constexpr (Consts::SupportsMags) {
-			magDriver.init(
+			const bool magInitialized = magDriver.init(
 				SoftFusion::MagInterface{
 					.readByte
 					= [&](uint8_t address) { return m_sensor.readAux(address); },
-					.writeByte = [&](uint8_t address, uint8_t value) {},
+					.writeByte
+					= [&](uint8_t address, uint8_t value) {
+						  return m_sensor.writeAux(address, value);
+					  },
 					.setDeviceId
 					= [&](uint8_t deviceId) { m_sensor.setAuxId(deviceId); },
 					.startPolling
-					= [&](uint8_t dataReg, SoftFusion::MagDataWidth dataWidth
-					  ) { m_sensor.startAuxPolling(dataReg, dataWidth); },
+					= [&](uint8_t dataReg,
+						  SoftFusion::MagDataWidth dataWidth,
+						  float samplePeriod) {
+						  m_sensor.startAuxPolling(dataReg, dataWidth, samplePeriod);
+					  },
 					.stopPolling = [&]() { m_sensor.stopAuxPolling(); },
 				},
 				Consts::Supports9ByteMag
 			);
 
-			if (toggles.getToggle(SensorToggles::MagEnabled)) {
+			if (!magInitialized) {
+				m_Logger.warn("No supported magnetometer was initialized");
+			} else if (toggles.getToggle(SensorToggles::MagEnabled)) {
 				magDriver.startPolling();
 			}
+			calibrator.setMagnetometerAvailable(
+				magInitialized && toggles.getToggle(SensorToggles::MagEnabled)
+			);
 		}
 
 		toggles.onToggleChange([&](SensorToggles toggle, bool value) {
@@ -367,9 +394,22 @@ public:
 		calibrator.startCalibration(calibrationType);
 	}
 
+	void cancelCalibration() final {
+		calibrator.cancelCalibration();
+	}
+
+	void printCalibrationStatus() final {
+		calibrator.printCalibrationStatus();
+	}
+
+	void beginStartupCalibration() final {
+		calibrator.checkStartupCalibration();
+	}
+
 	[[nodiscard]] bool isFlagSupported(SensorToggles toggle) const final {
 		return toggle == SensorToggles::CalibrationEnabled
-			|| toggle == SensorToggles::TempGradientCalibrationEnabled;
+			|| toggle == SensorToggles::TempGradientCalibrationEnabled
+			|| (toggle == SensorToggles::MagEnabled && Consts::SupportsMags);
 	}
 
 	SensorStatus getSensorState() final { return m_status; }
@@ -409,6 +449,55 @@ public:
 
 	const char* getAttachedMagnetometer() const final {
 		return magDriver.getAttachedMagName();
+	}
+
+	bool hasEnabledMagnetometer() const final {
+		return magDriver.getAttachedMagName() != nullptr
+			&& toggles.getToggle(SensorToggles::MagEnabled);
+	}
+
+	void setMagneticReference(float norm, float dipRadians) final {
+		m_fusion.setMagneticReference(norm, dipRadians);
+	}
+
+	void clearMagneticReference() final {
+		m_fusion.clearMagneticReference();
+	}
+
+	void printTemperatureCalibrationState() final {
+		calibrator.printTemperatureCalibrationState();
+	}
+
+	void printDebugTemperatureCalibrationState() final {
+		calibrator.printDebugTemperatureCalibrationState();
+	}
+
+	void resetTemperatureCalibrationState() final {
+		calibrator.resetTemperatureCalibrationState();
+	}
+
+	void saveTemperatureCalibration() final {
+		calibrator.saveTemperatureCalibration();
+	}
+
+	void startTemperatureCalibration() final {
+		calibrator.startTemperatureCalibration();
+	}
+
+	void stopTemperatureCalibration() final {
+		calibrator.stopTemperatureCalibration();
+	}
+
+	void setBackgroundTemperatureCalibration(bool enabled) final {
+		calibrator.setBackgroundTemperatureCalibration(enabled);
+	}
+
+	void clearTemperatureCalibration() final {
+		calibrator.clearTemperatureCalibration();
+	}
+
+	bool isStartupReady() const final {
+		return calibrator.isStartupCalibrationComplete();
 	}
 };
 

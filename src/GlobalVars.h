@@ -26,6 +26,7 @@
 
 #include "batterymonitor.h"
 #include "configuration/Configuration.h"
+#include "magnetic/WmmService.h"
 #include "network/connection.h"
 #include "network/manager.h"
 #include "network/wifihandler.h"
@@ -44,3 +45,4 @@ extern SlimeVR::Network::Connection networkConnection;
 extern BatteryMonitor battery;
 extern SlimeVR::WiFiNetwork wifiNetwork;
 extern SlimeVR::WifiProvisioning wifiProvisioning;
+extern SlimeVR::Magnetic::WmmService wmmService;

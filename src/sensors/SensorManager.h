@@ -46,8 +46,12 @@ public:
 		: m_Logger(SlimeVR::Logging::Logger("SensorManager")) {}
 	void setup();
 	void postSetup();
+	void beginStartupCalibration();
 
 	void update();
+	[[nodiscard]] bool hasEnabledMagnetometer() const;
+	void setMagneticReference(float norm, float dipRadians);
+	void clearMagneticReference();
 
 	std::vector<std::unique_ptr<::Sensor>>& getSensors() { return m_Sensors; };
 	SensorTypeID getSensorType(size_t id) {

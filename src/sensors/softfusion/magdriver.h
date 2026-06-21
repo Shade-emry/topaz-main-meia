@@ -38,9 +38,9 @@ enum class MagDataWidth {
 
 struct MagInterface {
 	std::function<uint8_t(uint8_t)> readByte;
-	std::function<void(uint8_t, uint8_t)> writeByte;
+	std::function<bool(uint8_t, uint8_t)> writeByte;
 	std::function<void(uint8_t)> setDeviceId;
-	std::function<void(uint8_t, MagDataWidth)> startPolling;
+	std::function<void(uint8_t, MagDataWidth, float)> startPolling;
 	std::function<void()> stopPolling;
 };
 
@@ -54,6 +54,8 @@ struct MagDefinition {
 
 	MagDataWidth dataWidth;
 	uint8_t dataReg;
+	float samplePeriod;
+	float microTeslaPerLsb;
 
 	std::function<bool(MagInterface& interface)> setup;
 };
@@ -64,6 +66,7 @@ public:
 	void startPolling() const;
 	void stopPolling() const;
 	[[nodiscard]] const char* getAttachedMagName() const;
+	[[nodiscard]] float getMicroTeslaPerLsb() const;
 
 private:
 	std::optional<MagDefinition> detectedMag;

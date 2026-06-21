@@ -68,6 +68,16 @@
 		AXIS_REMAP_USE_Z   \
 	)
 
+constexpr uint16_t AXIS_REMAP_DEFAULT_SENSOR
+	= AXIS_REMAP_GET_ALL_IMU(AXIS_REMAP_DEFAULT);
+
+inline bool isValidAxisRemap(uint16_t descriptor) {
+	const uint8_t x = AXIS_REMAP_GET_X(descriptor) & 0x03;
+	const uint8_t y = AXIS_REMAP_GET_Y(descriptor) & 0x03;
+	const uint8_t z = AXIS_REMAP_GET_Z(descriptor) & 0x03;
+	return x < 3 && y < 3 && z < 3 && x != y && x != z && y != z;
+}
+
 // Template functions for remapping
 template <typename T>
 T inline remapOneAxis(int axisdesc, T x, T y, T z) {

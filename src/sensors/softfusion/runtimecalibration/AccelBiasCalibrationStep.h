@@ -62,15 +62,29 @@ public:
 			return TickResult::CONTINUE;
 		}
 
-		float accelAverage = calibrationData.value().accelSum
-						   / static_cast<float>(calibrationData.value().sampleCount);
+		const float accelAverage
+			= calibrationData.value().accelSum
+			/ static_cast<float>(calibrationData.value().sampleCount) * accelScale;
+		const size_t axis = calibrationData.value().largestAxis;
+		const bool positive = accelAverage > 0;
+		const size_t side = axis * 2 + (positive ? 1 : 0);
+		sensorConfig.accelSideAverage[side] = accelAverage;
+		sensorConfig.accelSideCalibrated[side] = true;
 
-		float expected = accelAverage > 0 ? CONST_EARTH_GRAVITY : -CONST_EARTH_GRAVITY;
-
-		float accelOffset = accelAverage * accelScale - expected;
-
-		sensorConfig.A_off[calibrationData.value().largestAxis] = accelOffset;
-		sensorConfig.accelCalibrated[calibrationData.value().largestAxis] = true;
+		const size_t negativeSide = axis * 2;
+		const size_t positiveSide = negativeSide + 1;
+		if (sensorConfig.accelSideCalibrated[negativeSide]
+			&& sensorConfig.accelSideCalibrated[positiveSide]) {
+			const float negative = sensorConfig.accelSideAverage[negativeSide];
+			const float positiveValue = sensorConfig.accelSideAverage[positiveSide];
+			const float span = positiveValue - negative;
+			if (std::abs(span) > CONST_EARTH_GRAVITY) {
+				sensorConfig.A_off[axis] = (positiveValue + negative) * 0.5f;
+				sensorConfig.A_scale[axis]
+					= (2.0f * CONST_EARTH_GRAVITY) / span;
+				sensorConfig.accelCalibrated[axis] = true;
+			}
+		}
 
 		return TickResult::DONE;
 	}
@@ -100,7 +114,9 @@ public:
 			largestAxis = 2;
 		}
 
-		if (sensorConfig.accelCalibrated[largestAxis]) {
+		const bool positive = accelSample[largestAxis] > 0;
+		const size_t side = largestAxis * 2 + (positive ? 1 : 0);
+		if (sensorConfig.accelSideCalibrated[side]) {
 			calibrationData.value().axisDetermined = true;
 			calibrationData.value().largestAxis = -1;
 			return;
@@ -126,11 +142,19 @@ public:
 		calibrationData.value().currentAxis[2] = accelSample[2];
 	}
 
-	bool allAxesCalibrated() {
+	bool allAxesCalibrated() const {
 		return sensorConfig.accelCalibrated[0] && sensorConfig.accelCalibrated[1]
 			&& sensorConfig.accelCalibrated[2];
 	}
-	bool anyAxesCalibrated() {
+	bool allSidesCalibrated() const {
+		for (bool side : sensorConfig.accelSideCalibrated) {
+			if (!side) {
+				return false;
+			}
+		}
+		return true;
+	}
+	bool anyAxesCalibrated() const {
 		return sensorConfig.accelCalibrated[0] || sensorConfig.accelCalibrated[1]
 			|| sensorConfig.accelCalibrated[2];
 	}

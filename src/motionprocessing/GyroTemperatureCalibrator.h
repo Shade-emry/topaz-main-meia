@@ -29,7 +29,6 @@
 
 #include "../configuration/SensorConfig.h"
 #include "../logging/Logger.h"
-#include "OnlinePolyfit.h"
 #include "debug.h"
 
 // Degrees C
@@ -40,18 +39,16 @@
 // default: 45.0f
 #define TEMP_CALIBRATION_MAX 45.0f
 
-// Snap calibration to every 1/2 of degree: 20.00, 20.50, 21.00, etc
-// default: 0.5f
-#define TEMP_CALIBRATION_STEP 0.5f
+// Store one reliable stationary knot per degree and interpolate continuously.
+#define TEMP_CALIBRATION_STEP 1.0f
 
 // Record debug samples if current temperature is off by no more than this value;
 // if snapping point is 20.00 - samples will be recorded in range of 19.80 - 20.20
-// default: 0.2f
-#define TEMP_CALIBRATION_MAX_DEVIATION_FROM_STEP 0.2f
+#define TEMP_CALIBRATION_MAX_DEVIATION_FROM_STEP 0.35f
 
 // How long to average gyro samples for before saving a data point
-// default: 0.2f
-#define TEMP_CALIBRATION_SECONDS_PER_STEP 0.2f
+// Five seconds rejects short-term gyro noise and vibration.
+#define TEMP_CALIBRATION_SECONDS_PER_STEP 5.0f
 
 #if IMU == IMU_ICM20948
 // 16 bit 333 lsb/K, ~0.00508 degrees per bit
@@ -66,7 +63,8 @@
 
 constexpr uint16_t TEMP_CALIBRATION_BUFFER_SIZE
 	= (uint16_t)((TEMP_CALIBRATION_MAX - TEMP_CALIBRATION_MIN)
-				 * (1 / TEMP_CALIBRATION_STEP));
+				 * (1 / TEMP_CALIBRATION_STEP))
+	+ 1;
 
 #define TEMP_CALIBRATION_TEMP_TO_IDX(temperature)                                  \
 	(uint16_t)(                                                                    \
@@ -81,9 +79,9 @@ struct GyroTemperatureCalibrationState {
 	uint16_t temperatureCurrentIdx;
 	uint32_t numSamples;
 	float tSum;
-	int32_t xSum;
-	int32_t ySum;
-	int32_t zSum;
+	int64_t xSum;
+	int64_t ySum;
+	int64_t zSum;
 
 	GyroTemperatureCalibrationState()
 		: temperatureCurrentIdx(-1)
@@ -109,6 +107,7 @@ struct GyroTemperatureOffsetSample {
 
 struct GyroTemperatureCalibrationConfig {
 	SlimeVR::Configuration::SensorConfigType type;
+	uint16_t version = 2;
 
 	float sensitivityLSB;
 	float minTemperatureRange;
@@ -116,6 +115,7 @@ struct GyroTemperatureCalibrationConfig {
 	uint16_t minCalibratedIdx = 0;
 	uint16_t maxCalibratedIdx = 0;
 	GyroTemperatureOffsetSample samples[TEMP_CALIBRATION_BUFFER_SIZE];
+	uint16_t observations[TEMP_CALIBRATION_BUFFER_SIZE]{};
 	uint16_t samplesTotal = 0;
 	float cx[4] = {0.0};
 	float cy[4] = {0.0};
@@ -131,13 +131,13 @@ struct GyroTemperatureCalibrationConfig {
 		, minTemperatureRange(1000)
 		, maxTemperatureRange(-1000) {}
 
-	bool hasData() { return minTemperatureRange != 1000; }
+	bool hasData() const { return minTemperatureRange != 1000; }
 
-	bool fullyCalibrated() {
-		return samplesTotal >= TEMP_CALIBRATION_BUFFER_SIZE && hasCoeffs;
+	bool fullyCalibrated() const {
+		return samplesTotal >= TEMP_CALIBRATION_BUFFER_SIZE;
 	}
 
-	float getCalibrationDonePercent() {
+	float getCalibrationDonePercent() const {
 		return (float)samplesTotal / TEMP_CALIBRATION_BUFFER_SIZE * 100.0f;
 	}
 
@@ -166,6 +166,7 @@ struct GyroTemperatureCalibrationConfig {
 			samples[i].x = 0;
 			samples[i].y = 0;
 			samples[i].z = 0;
+			observations[i] = 0;
 		}
 		hasCoeffs = false;
 	}
@@ -197,16 +198,22 @@ public:
 		m_Logger.setTag(buf);
 	}
 
-	void updateGyroTemperatureCalibration(
+	bool updateGyroTemperatureCalibration(
 		const float temperature,
 		const bool restDetected,
-		int16_t x,
-		int16_t y,
-		int16_t z
+		int32_t x,
+		int32_t y,
+		int32_t z
 	);
 	bool approximateOffset(const float temperature, float GOxyz[3]);
 	bool loadConfig(float newSensitivity);
 	bool saveConfig();
+	void startLearning(bool background = false);
+	void stopLearning(bool save = true);
+	void setBackgroundLearning(bool enabled);
+	void printStatus() const;
+	void printSamples() const;
+	void clear();
 
 	void reset() {
 		config.reset();
@@ -214,7 +221,8 @@ public:
 		configSaveFailed = false;
 	}
 
-	bool isCalibrating() { return calibrationRunning; }
+	bool isCalibrating() const { return calibrationRunning; }
+	bool isBackgroundLearning() const { return backgroundLearning; }
 
 private:
 	GyroTemperatureCalibrationState state;
@@ -225,13 +233,9 @@ private:
 	float lastApproximatedOffsets[3];
 
 	bool calibrationRunning = false;
-	OnlineVectorPolyfit<3, 3, (uint64_t)1e9> poly;
-	float bst = 0.0f;
-	int32_t bsx = 0;
-	int32_t bsy = 0;
-	int32_t bsz = 0;
-	int32_t bn = 0;
-	float lastTemp = 0;
+	bool backgroundLearning = false;
+	bool dirty = false;
+	uint16_t acceptedSinceSave = 0;
 
 	void resetCurrentTemperatureState();
 };

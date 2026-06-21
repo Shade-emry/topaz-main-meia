@@ -76,8 +76,14 @@ public:
 	);
 
 	void updateBiasForgettingTime(float biasForgettingTime);
+	void setMagneticReference(sensor_real_t norm, sensor_real_t dipRadians);
+	void clearMagneticReference();
+	void transferGyroPreBias(const sensor_real_t delta[3]);
 
 	[[nodiscard]] bool getRestDetected() const;
+	[[nodiscard]] bool getMagDistDetected() const;
+	[[nodiscard]] sensor_real_t getMagReferenceNorm() const;
+	[[nodiscard]] sensor_real_t getMagReferenceDip() const;
 
 protected:
 	sensor_real_t gyrTs;

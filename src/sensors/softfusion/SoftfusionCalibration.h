@@ -75,6 +75,7 @@ public:
 				[](const RawSensorT xyz[3], const sensor_real_t timeDelta) {},
 				[](const RawSensorT xyz[3], const sensor_real_t timeDelta) {},
 				[](const int16_t xyz, const sensor_real_t timeDelta) {},
+				[](const RawSensorT xyz[3], const sensor_real_t timeDelta) {},
 			});
 		}
 	}
@@ -101,6 +102,7 @@ public:
 				[&](const int16_t rawTemp, const sensor_real_t timeDelta) {
 					temp = rawTemp;
 				},
+				[](const RawSensorT xyz[3], const sensor_real_t timeDelta) {},
 			});
 			yield();
 		}
@@ -232,6 +234,22 @@ public:
 
 	float getGyroTimestep() final { return calibration.G_Ts; }
 
+	void scaleMagSample(sensor_real_t magSample[3]) final {
+		const sensor_real_t unbiased[3]{
+			magSample[0] - calibration.M_B[0],
+			magSample[1] - calibration.M_B[1],
+			magSample[2] - calibration.M_B[2],
+		};
+
+		for (size_t row = 0; row < 3; row++) {
+			magSample[row] = calibration.M_Ainv[row][0] * unbiased[0]
+						   + calibration.M_Ainv[row][1] * unbiased[1]
+						   + calibration.M_Ainv[row][2] * unbiased[2];
+		}
+	}
+
+	float getMagTimestep() final { return calibration.M_Ts; }
+
 	float getTempTimestep() final { return calibration.T_Ts; }
 
 	const uint8_t* getMotionlessCalibrationData() final {
@@ -298,6 +316,7 @@ private:
 					++sampleCount;
 				},
 				[](const int16_t rawTemp, const sensor_real_t timeDelta) {},
+				[](const RawSensorT xyz[3], const sensor_real_t timeDelta) {},
 			});
 		}
 
@@ -420,6 +439,7 @@ private:
 				},
 				[](const RawSensorT xyz[3], const sensor_real_t timeDelta) {},
 				[](const int16_t rawTemp, const sensor_real_t timeDelta) {},
+				[](const RawSensorT xyz[3], const sensor_real_t timeDelta) {},
 			});
 		}
 		ledManager.off();
@@ -474,6 +494,7 @@ private:
 				[&](const int16_t rawTemp, const sensor_real_t timeDelta) {
 					tempSamples++;
 				},
+				[](const RawSensorT xyz[3], const sensor_real_t timeDelta) {},
 			});
 			yield();
 		}

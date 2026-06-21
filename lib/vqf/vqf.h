@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: MIT
 
-// Modified to add timestamps in: updateGyr(const vqf_real_t gyr[3], vqf_real_t gyrTs)
+// Modified to accept measured sample intervals in updateGyr, updateAcc, and
+// updateMag.
 // Removed batch update functions
 
 #ifndef VQF_HPP
@@ -304,6 +305,20 @@ struct VQFParams {
 	 * Default value: 2.0
 	 */
 	vqf_real_t magRejectionFactor = 2.0;
+
+	/**
+	 * @brief Keep heading correction disabled for as long as the magnetic field
+	 * remains disturbed. This avoids slowly following persistent indoor magnetic
+	 * interference.
+	 */
+	bool magRejectPersistent = false;
+
+	/**
+	 * @brief Maximum magnetic heading correction rate in degrees per second.
+	 *
+	 * A non-positive value disables rate limiting.
+	 */
+	vqf_real_t magMaxCorrectionRate = 0.0;
 };
 
 /**
@@ -722,6 +737,7 @@ public:
 	 * and magnetometers have different sampling rates. Otherwise, simply use #update().
 	 *
 	 * @param gyr gyroscope measurement in rad/s
+	 * @param gyrTs elapsed time since the previous gyroscope sample in seconds
 	 */
 	void updateGyr(const vqf_real_t gyr[3], vqf_real_t gyrTs);
 	/**
@@ -733,8 +749,10 @@ public:
 	 * Should be called after #updateGyr and before #updateMag.
 	 *
 	 * @param acc accelerometer measurement in m/s²
+	 * @param accTs elapsed time since the previous accelerometer sample in
+	 * seconds, or a non-positive value to use the configured nominal sample time
 	 */
-	void updateAcc(const vqf_real_t acc[3]);
+	void updateAcc(const vqf_real_t acc[3], vqf_real_t accTs = -1.0);
 	/**
 	 * @brief Performs magnetometer update step.
 	 *
@@ -744,8 +762,10 @@ public:
 	 * Should be called after #updateAcc.
 	 *
 	 * @param mag magnetometer measurement in arbitrary units
+	 * @param magTs elapsed time since the previous magnetometer sample in
+	 * seconds, or a non-positive value to use the configured nominal sample time
 	 */
-	void updateMag(const vqf_real_t mag[3]);
+	void updateMag(const vqf_real_t mag[3], vqf_real_t magTs = -1.0);
 
 	/**
 	 * @brief Returns the angular velocity strapdown integration quaternion
@@ -1116,6 +1136,14 @@ public:
 	void updateBiasForgettingTime(float biasForgettingTime);
 
 protected:
+	void adaptGyrFilterToSampleTime(vqf_real_t sampleTime);
+	void adaptAccFiltersToSampleTime(vqf_real_t sampleTime);
+	void adaptMagFilterToSampleTime(vqf_real_t sampleTime);
+	static bool filterSampleTimeChanged(
+		vqf_real_t previous,
+		vqf_real_t current
+	);
+
 	/**
 	 * @brief Calculates coefficients based on parameters and sampling rates.
 	 */
@@ -1142,6 +1170,10 @@ protected:
 	 * See #getCoeffs.
 	 */
 	VQFCoefficients coeffs;
+
+	vqf_real_t gyrFilterTs;
+	vqf_real_t accFilterTs;
+	vqf_real_t magFilterTs;
 };
 
 #endif  // VQF_HPP

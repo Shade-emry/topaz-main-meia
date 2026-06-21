@@ -44,6 +44,7 @@ SlimeVR::Network::Manager networkManager;
 SlimeVR::Network::Connection networkConnection;
 SlimeVR::WiFiNetwork wifiNetwork;
 SlimeVR::WifiProvisioning wifiProvisioning;
+SlimeVR::Magnetic::WmmService wmmService;
 
 SlimeVR::Debugging::Benchmark tpsCounterBM{"tpsCounter.update()"};
 SlimeVR::Debugging::Benchmark globalTimerBM{"globalTimer.tick()"};
@@ -149,7 +150,12 @@ void setup() {
 	sensorManager.setup();
 
 	networkManager.setup();
+	wmmService.setup();
+	wmmService.resolveStartup();
+	sensorManager.beginStartupCalibration();
+#if USE_OTA
 	OTA::otaSetup(otaPassword);
+#endif
 	battery.Setup();
 
 	statusManager.setStatus(SlimeVR::Status::LOADING, false);
@@ -173,9 +179,11 @@ void loop() {
 	SerialCommands::update();
 	serialCommandsBM.after();
 
+#if USE_OTA
 	otaBM.before();
 	OTA::otaUpdate();
 	otaBM.after();
+#endif
 
 	networkManagerBM.before();
 	networkManager.update();

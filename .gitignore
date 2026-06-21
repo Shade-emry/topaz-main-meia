@@ -8,3 +8,4 @@ compile_commands.json
 node_modules/
 dist/
 .nix-platformio
+src/secrets.local.h

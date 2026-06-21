@@ -28,7 +28,7 @@ void SensorFusion::updateAcc(const sensor_real_t Axyz[3], sensor_real_t deltat) 
 	}
 
 	std::copy(Axyz, Axyz + 3, bAxyz);
-	vqf.updateAcc(Axyz);
+	vqf.updateAcc(Axyz, deltat);
 }
 
 void SensorFusion::updateMag(const sensor_real_t Mxyz[3], sensor_real_t deltat) {
@@ -44,7 +44,7 @@ void SensorFusion::updateMag(const sensor_real_t Mxyz[3], sensor_real_t deltat) 
 		}
 	}
 
-	vqf.updateMag(Mxyz);
+	vqf.updateMag(Mxyz, deltat);
 }
 
 void SensorFusion::updateGyro(const sensor_real_t Gxyz[3], sensor_real_t deltat) {
@@ -129,6 +129,33 @@ void SensorFusion::updateBiasForgettingTime(float biasForgettingTime) {
 	vqf.updateBiasForgettingTime(biasForgettingTime);
 }
 
+void SensorFusion::setMagneticReference(
+	sensor_real_t norm,
+	sensor_real_t dipRadians
+) {
+	vqf.setMagRef(norm, dipRadians);
+}
+
+void SensorFusion::clearMagneticReference() {
+	vqf.setMagRef(0.0f, 0.0f);
+}
+
+void SensorFusion::transferGyroPreBias(const sensor_real_t delta[3]) {
+	sensor_real_t bias[3]{};
+	const sensor_real_t sigma = vqf.getBiasEstimate(bias);
+	for (size_t axis = 0; axis < 3; axis++) {
+		bias[axis] -= delta[axis];
+	}
+	vqf.setBiasEstimate(bias, sigma);
+}
+
 bool SensorFusion::getRestDetected() const { return vqf.getRestDetected(); }
+bool SensorFusion::getMagDistDetected() const { return vqf.getMagDistDetected(); }
+sensor_real_t SensorFusion::getMagReferenceNorm() const {
+	return vqf.getMagRefNorm();
+}
+sensor_real_t SensorFusion::getMagReferenceDip() const {
+	return vqf.getMagRefDip();
+}
 
 }  // namespace SlimeVR::Sensors

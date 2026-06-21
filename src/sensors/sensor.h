@@ -80,14 +80,25 @@ public:
 	virtual void setAcceleration(Vector3 a);
 	virtual void setFusedRotation(Quat r);
 	virtual void startCalibration(int calibrationType){};
+	virtual void cancelCalibration(){};
+	virtual void printCalibrationStatus(){};
 	virtual SensorStatus getSensorState();
 	virtual void printTemperatureCalibrationState();
 	virtual void printDebugTemperatureCalibrationState();
 	virtual void resetTemperatureCalibrationState();
 	virtual void saveTemperatureCalibration();
+	virtual void startTemperatureCalibration();
+	virtual void stopTemperatureCalibration();
+	virtual void setBackgroundTemperatureCalibration(bool enabled);
+	virtual void clearTemperatureCalibration();
 	// TODO: currently only for softfusionsensor, bmi160 and others should get
 	// an overload too
 	virtual const char* getAttachedMagnetometer() const;
+	virtual bool hasEnabledMagnetometer() const;
+	virtual void setMagneticReference(float norm, float dipRadians);
+	virtual void clearMagneticReference();
+	virtual void beginStartupCalibration();
+	[[nodiscard]] virtual bool isStartupReady() const;
 	// TODO: realistically each sensor should print its own state instead of
 	// having 15 getters for things only the serial commands use
 	bool isWorking() { return working; };

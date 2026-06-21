@@ -33,16 +33,16 @@ namespace SlimeVR::Sensors::SoftFusion::Drivers {
 // Driver uses acceleration range at 32g
 // and gyroscope range at 4000dps
 // using high resolution mode
-// Uses 32.768kHz clock
-// Gyroscope ODR = 204.8Hz, accel ODR = 102.4Hz
-// Timestamps reading not used, as they're useless (constant predefined increment)
+// Uses the internal clock
+// Gyroscope ODR = 400Hz, accel ODR = 400Hz
+// FIFO timestamps are enabled and used to derive actual sample intervals.
 
 struct ICM45Base {
 	static constexpr uint8_t Address = 0x68;
 
-	static constexpr float GyrTs = 1.0 / 204.8;
-	static constexpr float AccTs = 1.0 / 102.4;
-	static constexpr float TempTs = 1.0 / 409.6;
+	static constexpr float GyrTs = 1.0 / 400.0;
+	static constexpr float AccTs = 1.0 / 400.0;
+	static constexpr float TempTs = 1.0 / 400.0;
 
 	static constexpr float MagTs = 1.0 / 100;
 
@@ -65,26 +65,28 @@ struct ICM45Base {
 
 		struct DeviceConfig {
 			static constexpr uint8_t reg = 0x7f;
-			static constexpr uint8_t valueSwReset = 0b11;
+			static constexpr uint8_t valueSwReset = 0b10;
 		};
 
 		struct GyroConfig {
 			static constexpr uint8_t reg = 0x1c;
 			static constexpr uint8_t value
-				= (0b0000 << 4) | 0b1000;  // 4000dps, odr=204.8Hz
+				= (0b0000 << 4) | 0b0111;  // 4000dps, ODR=400Hz
 		};
 
 		struct AccelConfig {
 			static constexpr uint8_t reg = 0x1b;
 			static constexpr uint8_t value
-				= (0b000 << 4) | 0b1001;  // 32g, odr = 102.4Hz
+				= (0b000 << 4) | 0b0111;  // 32g, ODR=400Hz
 		};
 
 		struct FifoConfig0 {
 			static constexpr uint8_t reg = 0x1d;
 			static constexpr uint8_t value
-				= (0b01 << 6) | (0b011111);  // stream to FIFO mode, FIFO depth
-											 // 8k bytes <-- this disables all APEX
+				= (0b01 << 6) | (0b011110);  // stream to FIFO mode, FIFO depth
+											 // Maximum usable depth; 0x1F is
+											 // affected by the FIFO-depth erratum.
+											 // This disables all APEX
 											 // features, but we don't need them
 		};
 
@@ -95,6 +97,16 @@ struct ICM45Base {
 														  // enable accel,
 														  // enable gyro,
 														  // enable hires mode
+		};
+
+		struct FifoConfig4 {
+			static constexpr uint8_t reg = 0x22;
+			static constexpr uint8_t valueTimestampEnabled = (0b1 << 1);
+		};
+
+		struct TmstWomConfig {
+			static constexpr uint8_t reg = 0x23;
+			static constexpr uint8_t resolution16us = (0b1 << 5);
 		};
 
 		struct PwrMgmt0 {
@@ -175,6 +187,14 @@ struct ICM45Base {
 			static constexpr uint8_t TimeoutErr = 0b1 << 2;
 			static constexpr uint8_t Done = 0b1 << 1;
 			static constexpr uint8_t Busy = 0b1 << 0;
+			static constexpr uint8_t ErrorMask
+				= SDAErr | SCLErr | SRSTErr | TimeoutErr;
+		};
+
+		struct SmcControl0 {
+			static constexpr Bank bank = Bank::IPregTop1;
+			static constexpr uint8_t reg = 0x58;
+			static constexpr uint8_t timestampEnable = (0b1 << 0);
 		};
 	};
 
@@ -216,10 +236,23 @@ struct ICM45Base {
 			BaseRegs::FifoConfig3::reg,
 			BaseRegs::FifoConfig3::value
 		);
+		uint8_t fifoConfig4
+			= m_RegisterInterface.readReg(BaseRegs::FifoConfig4::reg);
+		fifoConfig4 |= BaseRegs::FifoConfig4::valueTimestampEnabled;
+		m_RegisterInterface.writeReg(BaseRegs::FifoConfig4::reg, fifoConfig4);
 		m_RegisterInterface.writeReg(
 			BaseRegs::PwrMgmt0::reg,
 			BaseRegs::PwrMgmt0::value
 		);
+
+		// Configure the timestamp counter before consuming FIFO frames.
+		uint8_t tmstConfig = m_RegisterInterface.readReg(BaseRegs::TmstWomConfig::reg);
+		tmstConfig &= ~BaseRegs::TmstWomConfig::resolution16us;
+		m_RegisterInterface.writeReg(BaseRegs::TmstWomConfig::reg, tmstConfig);
+
+		uint8_t smcControl = readBankRegister<typename BaseRegs::SmcControl0>();
+		smcControl |= BaseRegs::SmcControl0::timestampEnable;
+		writeBankRegister<typename BaseRegs::SmcControl0>(smcControl);
 
 		m_RegisterInterface.writeReg(
 			BaseRegs::IOCPadScenarioAuxOvrd::reg,
@@ -227,6 +260,7 @@ struct ICM45Base {
 		);
 
 		read_buffer.resize(FullFifoEntrySize * MaxReadings);
+		resetTimestamps();
 
 		delay(1);
 
@@ -241,9 +275,12 @@ struct ICM45Base {
 	bool bulkRead(DriverCallbacks<int32_t>&& callbacks) {
 		constexpr int16_t InvalidReading = -32768;
 
+		// AN-000364 (2.2): read FIFO_COUNT twice and use the second value.
+		m_RegisterInterface.readReg16(BaseRegs::FifoCount);
 		size_t fifo_packets = m_RegisterInterface.readReg16(BaseRegs::FifoCount);
 
 		if (fifo_packets <= 1) {
+			pollAux(callbacks);
 			return false;
 		}
 
@@ -274,41 +311,130 @@ struct ICM45Base {
 			uint8_t header = read_buffer[i];
 			bool has_gyro = header & (1 << 5);
 			bool has_accel = header & (1 << 6);
+			bool has_timestamp = header & (1 << 3);
 
-			FifoEntryAligned entry;
-			memcpy(
-				&entry,
-				&read_buffer[i + 0x1],
-				sizeof(FifoEntryAligned)
-			);  // skip fifo header
+			const uint8_t* frame = &read_buffer[i + 1];
+			FifoEntryAligned entry{
+				.accel =
+					{readLittleEndianInt16(frame + 0),
+					 readLittleEndianInt16(frame + 2),
+					 readLittleEndianInt16(frame + 4)},
+				.gyro =
+					{readLittleEndianInt16(frame + 6),
+					 readLittleEndianInt16(frame + 8),
+					 readLittleEndianInt16(frame + 10)},
+				.temp = readLittleEndianUint16(frame + 12),
+				.timestamp = readLittleEndianUint16(frame + 14),
+				.lsb = {frame[16], frame[17], frame[18]},
+			};
+
+			// Process temperature first so this frame's gyro sample is corrected
+			// using the matching temperature.
+			if (static_cast<int16_t>(entry.temp) != InvalidReading) {
+				callbacks.processTempSample(
+					static_cast<int16_t>(entry.temp),
+					getSampleDelta(
+						entry.timestamp,
+						TempTs,
+						lastTempTimestamp,
+						tempTimestampInitialized,
+						has_timestamp
+					)
+				);
+			}
 
 			if (has_gyro && entry.gyro[0] != InvalidReading) {
 				const int32_t gyroData[3]{
-					static_cast<int32_t>(entry.gyro[0]) << 4 | (entry.lsb[0] & 0xf),
-					static_cast<int32_t>(entry.gyro[1]) << 4 | (entry.lsb[1] & 0xf),
-					static_cast<int32_t>(entry.gyro[2]) << 4 | (entry.lsb[2] & 0xf),
+					decode20Bit(entry.gyro[0], entry.lsb[0] & 0x0f),
+					decode20Bit(entry.gyro[1], entry.lsb[1] & 0x0f),
+					decode20Bit(entry.gyro[2], entry.lsb[2] & 0x0f),
 				};
-				callbacks.processGyroSample(gyroData, GyrTs);
+				callbacks.processGyroSample(
+					gyroData,
+					getSampleDelta(
+						entry.timestamp,
+						GyrTs,
+						lastGyroTimestamp,
+						gyroTimestampInitialized,
+						has_timestamp
+					)
+				);
 			}
 
 			if (has_accel && entry.accel[0] != InvalidReading) {
 				const int32_t accelData[3]{
-					static_cast<int32_t>(entry.accel[0]) << 4
-						| (static_cast<int32_t>((entry.lsb[0]) & 0xf0) >> 4),
-					static_cast<int32_t>(entry.accel[1]) << 4
-						| (static_cast<int32_t>((entry.lsb[1]) & 0xf0) >> 4),
-					static_cast<int32_t>(entry.accel[2]) << 4
-						| (static_cast<int32_t>((entry.lsb[2]) & 0xf0) >> 4),
+					decode20Bit(entry.accel[0], (entry.lsb[0] & 0xf0) >> 4),
+					decode20Bit(entry.accel[1], (entry.lsb[1] & 0xf0) >> 4),
+					decode20Bit(entry.accel[2], (entry.lsb[2] & 0xf0) >> 4),
 				};
-				callbacks.processAccelSample(accelData, AccTs);
-			}
-
-			if (entry.temp != 0x8000) {
-				callbacks.processTempSample(static_cast<int16_t>(entry.temp), TempTs);
+				callbacks.processAccelSample(
+					accelData,
+					getSampleDelta(
+						entry.timestamp,
+						AccTs,
+						lastAccelTimestamp,
+						accelTimestampInitialized,
+						has_timestamp
+					)
+				);
 			}
 		}
 
+		pollAux(callbacks);
 		return fifo_packets > MaxReadings;
+	}
+
+	static int16_t readLittleEndianInt16(const uint8_t* data) {
+		return static_cast<int16_t>(readLittleEndianUint16(data));
+	}
+
+	static uint16_t readLittleEndianUint16(const uint8_t* data) {
+		return static_cast<uint16_t>(data[0])
+			 | (static_cast<uint16_t>(data[1]) << 8);
+	}
+
+	static int32_t decode20Bit(int16_t high16, uint8_t low4) {
+		uint32_t raw = (static_cast<uint32_t>(static_cast<uint16_t>(high16)) << 4)
+					 | (low4 & 0x0f);
+		if (raw & 0x80000) {
+			raw |= 0xfff00000;
+		}
+		return static_cast<int32_t>(raw);
+	}
+
+	static float getSampleDelta(
+		uint16_t timestamp,
+		float nominalDelta,
+		uint16_t& lastTimestamp,
+		bool& initialized,
+		bool timestampValid
+	) {
+		if (!timestampValid) {
+			initialized = false;
+			return nominalDelta;
+		}
+
+		if (!initialized) {
+			lastTimestamp = timestamp;
+			initialized = true;
+			return nominalDelta;
+		}
+
+		const uint16_t ticks = timestamp - lastTimestamp;
+		lastTimestamp = timestamp;
+		const float measuredDelta = static_cast<float>(ticks) * TimestampTickSeconds;
+
+		if (measuredDelta < nominalDelta * 0.25f
+			|| measuredDelta > nominalDelta * 8.0f) {
+			return nominalDelta;
+		}
+		return measuredDelta;
+	}
+
+	void resetTimestamps() {
+		gyroTimestampInitialized = false;
+		accelTimestampInitialized = false;
+		tempTimestampInitialized = false;
 	}
 
 	template <typename Reg>
@@ -363,77 +489,150 @@ struct ICM45Base {
 	}
 
 	void setAuxId(uint8_t deviceId) {
-		writeBankRegister<typename BaseRegs::I2CMDevProfile1>(deviceId);
+		// I2CM_DEV_PROFILE stores a 7-bit address.
+		writeBankRegister<typename BaseRegs::I2CMDevProfile1>(deviceId & 0x7f);
 	}
 
 	uint8_t readAux(uint8_t address) {
+		uint8_t value = 0xff;
+		readAuxBytes(address, &value, sizeof(value));
+		return value;
+	}
+
+	bool readAuxBytes(uint8_t address, uint8_t* values, size_t length) {
+		if (values == nullptr || length == 0 || length > 0x0f) {
+			return false;
+		}
+
 		writeBankRegister<typename BaseRegs::I2CMDevProfile0>(address);
 
 		writeBankRegister<typename BaseRegs::I2CMCommand0>(
 			(0b1 << 7)  // Last transaction
 			| (0b0 << 6)  // Channel 0
 			| (0b01 << 4)  // Read with register
-			| (0b0001 << 0)  // Read 1 byte
+			| static_cast<uint8_t>(length)
 		);
-		writeBankRegister<typename BaseRegs::I2CMControl>(
-			(0b0 << 6)  // No restarts
-			| (0b0 << 3)  // Fast mode
-			| (0b1 << 0)  // Start transaction
-		);
-
-		uint8_t lastStatus;
-		while ((lastStatus = readBankRegister<typename BaseRegs::I2CMStatus>())
-			   & BaseRegs::I2CMStatus::Busy)
-			;
-
-		if (lastStatus != BaseRegs::I2CMStatus::Done) {
-			m_Logger.error(
-				"Aux read from address 0x%02x returned status 0x%02x",
-				address,
-				lastStatus
-			);
+		if (!executeAuxTransaction("read", address)) {
+			return false;
 		}
 
-		return readBankRegister<typename BaseRegs::I2CMRdData0>();
+		readBankRegister<typename BaseRegs::I2CMRdData0>(values, length);
+		return true;
 	}
 
-	void writeAux(uint8_t address, uint8_t value) {
-		writeBankRegister<typename BaseRegs::I2CMDevProfile0>(address);
-		writeBankRegister<typename BaseRegs::I2CMWrData0>(value);
+	bool writeAux(uint8_t address, uint8_t value) {
+		uint8_t writeData[]{address, value};
+		writeBankRegister<typename BaseRegs::I2CMWrData0>(
+			writeData,
+			sizeof(writeData)
+		);
 		writeBankRegister<typename BaseRegs::I2CMCommand0>(
 			(0b1 << 7)  // Last transaction
 			| (0b0 << 6)  // Channel 0
-			| (0b01 << 4)  // Read with register
-			| (0b0001 << 0)  // Read 1 byte
+			| (0b00 << 4)  // Write
+			| (0b0010 << 0)  // Register address plus one data byte
 		);
-		writeBankRegister<typename BaseRegs::I2CMControl>(
-			(0b0 << 6)  // No restarts
-			| (0b0 << 3)  // Fast mode
-			| (0b1 << 0)  // Start transaction
-		);
-
-		uint8_t lastStatus;
-		while ((lastStatus = readBankRegister<typename BaseRegs::I2CMStatus>())
-			   & BaseRegs::I2CMStatus::Busy)
-			;
-
-		if (lastStatus != BaseRegs::I2CMStatus::Done) {
-			m_Logger.error(
-				"Aux write to address 0x%02x with value 0x%02x returned status 0x%02x",
-				address,
-				value,
-				lastStatus
-			);
-		}
+		return executeAuxTransaction("write", address);
 	}
 
-	void startAuxPolling(uint8_t dataReg, MagDataWidth dataWidth) {
-		// TODO:
+	void startAuxPolling(
+		uint8_t dataReg,
+		MagDataWidth dataWidth,
+		float samplePeriod
+	) {
+		auxDataReg = dataReg;
+		auxDataLength = dataWidth == MagDataWidth::NineByte ? 9 : 6;
+		auxSamplePeriod = samplePeriod > 0 ? samplePeriod : MagTs;
+		auxPollingEnabled = true;
+		magTimestampInitialized = false;
 	}
 
 	void stopAuxPolling() {
-		// TODO:
+		auxPollingEnabled = false;
+		magTimestampInitialized = false;
 	}
+
+private:
+	bool executeAuxTransaction(const char* operation, uint8_t address) {
+		uint8_t control = readBankRegister<typename BaseRegs::I2CMControl>();
+		control &= ~((0b1 << 6) | (0b1 << 3));  // No restart, fast mode
+		control |= 0b1;  // Start transaction
+		writeBankRegister<typename BaseRegs::I2CMControl>(control);
+
+		const uint32_t start = micros();
+		uint8_t status;
+		do {
+			status = readBankRegister<typename BaseRegs::I2CMStatus>();
+			if (micros() - start > AuxTransactionTimeoutMicros) {
+				m_Logger.error(
+					"Aux %s at register 0x%02x timed out",
+					operation,
+					address
+				);
+				return false;
+			}
+		} while (status & BaseRegs::I2CMStatus::Busy);
+
+		if ((status & BaseRegs::I2CMStatus::ErrorMask)
+			|| !(status & BaseRegs::I2CMStatus::Done)) {
+			m_Logger.error(
+				"Aux %s at register 0x%02x returned status 0x%02x",
+				operation,
+				address,
+				status
+			);
+			return false;
+		}
+		return true;
+	}
+
+	void pollAux(DriverCallbacks<int32_t>& callbacks) {
+		if (!auxPollingEnabled || !callbacks.processMagSample) {
+			return;
+		}
+
+		const uint32_t now = micros();
+		const uint32_t elapsedMicros = now - lastMagTimestampMicros;
+		const uint32_t targetMicros
+			= static_cast<uint32_t>(auxSamplePeriod * 1e6f);
+		if (magTimestampInitialized && elapsedMicros < targetMicros) {
+			return;
+		}
+
+		uint8_t data[9]{};
+		if (!readAuxBytes(auxDataReg, data, auxDataLength)) {
+			return;
+		}
+
+		float delta = auxSamplePeriod;
+		if (magTimestampInitialized) {
+			delta = static_cast<float>(elapsedMicros) * 1e-6f;
+		}
+		lastMagTimestampMicros = now;
+		magTimestampInitialized = true;
+
+		const int32_t magData[3]{
+			readLittleEndianInt16(data + 0),
+			readLittleEndianInt16(data + 2),
+			readLittleEndianInt16(data + 4),
+		};
+		callbacks.processMagSample(magData, delta);
+	}
+
+	static constexpr float TimestampTickSeconds = 1e-6f;
+	static constexpr uint32_t AuxTransactionTimeoutMicros = 5000;
+	uint16_t lastGyroTimestamp = 0;
+	uint16_t lastAccelTimestamp = 0;
+	uint16_t lastTempTimestamp = 0;
+	bool gyroTimestampInitialized = false;
+	bool accelTimestampInitialized = false;
+	bool tempTimestampInitialized = false;
+	bool auxPollingEnabled = false;
+	uint8_t auxDataReg = 0;
+	size_t auxDataLength = 0;
+	float auxSamplePeriod = MagTs;
+	uint32_t lastMagTimestampMicros = 0;
+	bool magTimestampInitialized = false;
 };
 
 };  // namespace SlimeVR::Sensors::SoftFusion::Drivers

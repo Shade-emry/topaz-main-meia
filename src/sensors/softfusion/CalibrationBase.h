@@ -65,6 +65,8 @@ public:
 
 	virtual void checkStartupCalibration() {}
 	virtual void startCalibration(int calibrationType){};
+	virtual void cancelCalibration() {}
+	virtual void printCalibrationStatus() {}
 
 	virtual bool calibrationMatches(
 		const SlimeVR::Configuration::SensorConfig& sensorCalibration
@@ -83,6 +85,9 @@ public:
 	virtual void scaleGyroSample(sensor_real_t gyroSample[3]) = 0;
 	virtual float getGyroTimestep() = 0;
 
+	virtual void scaleMagSample(sensor_real_t magSample[3]) = 0;
+	virtual float getMagTimestep() = 0;
+
 	virtual float getTempTimestep() = 0;
 
 	virtual const uint8_t* getMotionlessCalibrationData() = 0;
@@ -90,9 +95,27 @@ public:
 	virtual void signalOverwhelmed() {}
 	virtual void provideAccelSample(const RawSensorT accelSample[3]) {}
 	virtual void provideGyroSample(const RawSensorT gyroSample[3]) {}
+	virtual void provideMagSample(const RawSensorT magSample[3]) {}
 	virtual void provideTempSample(float tempSample) {}
 
 	virtual float getZROChange() { return IMU::TemperatureZROChange; };
+
+	virtual void printTemperatureCalibrationState() {
+		logger.info("Temperature curve is not enabled for this calibration backend");
+	}
+	virtual void printDebugTemperatureCalibrationState() {
+		printTemperatureCalibrationState();
+	}
+	virtual void resetTemperatureCalibrationState() {}
+	virtual void saveTemperatureCalibration() {}
+	virtual void startTemperatureCalibration() {}
+	virtual void stopTemperatureCalibration() {}
+	virtual void setBackgroundTemperatureCalibration(bool) {}
+	virtual void clearTemperatureCalibration() {}
+	virtual void setMagnetometerAvailable(bool) {}
+	[[nodiscard]] virtual bool isStartupCalibrationComplete() const {
+		return true;
+	}
 
 protected:
 	void recalcFusion() {
@@ -100,7 +123,7 @@ protected:
 			IMU::SensorVQFParams,
 			getGyroTimestep(),
 			getAccelTimestep(),
-			getTempTimestep()
+			getMagTimestep()
 		);
 	}
 

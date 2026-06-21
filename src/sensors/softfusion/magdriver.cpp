@@ -29,46 +29,60 @@ std::vector<MagDefinition> MagDriver::supportedMags{
 	MagDefinition{
 		.name = "QMC6309",
 
-		.deviceId = 0x7c,
+		.deviceId = 0x3e,
 
 		.whoAmIReg = 0x00,
 		.expectedWhoAmI = 0x90,
 
 		.dataWidth = MagDataWidth::SixByte,
 		.dataReg = 0x01,
+		.samplePeriod = 1.0f / 100.0f,
+		// QMC6309 8-gauss mode sensitivity: 3000 LSB/gauss.
+		.microTeslaPerLsb = 100.0f / 3000.0f,
 
 		.setup =
 			[](MagInterface& interface) {
-				interface.writeByte(0x0b, 0x80);
-				interface.writeByte(0x0b, 0x00);  // Soft reset
+				if (!interface.writeByte(0x0b, 0x80)
+					|| !interface.writeByte(0x0b, 0x00)) {  // Soft reset
+					return false;
+				}
 				delay(10);
-				interface.writeByte(0x0b, 0x48);  // Set/reset on, 8g full range, 200Hz
-				interface.writeByte(
-					0x0a,
-					0x21
-				);  // LP filter 2, 8x Oversampling, normal mode
-				return true;
+				return interface.writeByte(
+						   0x0b,
+						   0x48
+					   )  // Set/reset on, 8g full range, 200Hz
+					&& interface.writeByte(
+						0x0a,
+						0x21
+					);  // LP filter 2, 8x Oversampling, normal mode
 			},
 	},
 	MagDefinition{
 		.name = "IST8306",
 
-		.deviceId = 0x19,
+		.deviceId = 0x0c,
 
 		.whoAmIReg = 0x00,
 		.expectedWhoAmI = 0x06,
 
 		.dataWidth = MagDataWidth::SixByte,
 		.dataReg = 0x11,
+		.samplePeriod = 1.0f / 10.0f,
+		// IST8306 nominal sensitivity.
+		.microTeslaPerLsb = 0.3f,
 
 		.setup =
 			[](MagInterface& interface) {
-				interface.writeByte(0x32, 0x01);  // Soft reset
+				if (!interface.writeByte(0x32, 0x01)) {  // Soft reset
+					return false;
+				}
 				delay(50);
-				interface.writeByte(0x30, 0x20);  // Noise suppression: low
-				interface.writeByte(0x41, 0x2d);  // Oversampling: 32X
-				interface.writeByte(0x31, 0x02);  // Continuous measurement @ 10Hz
-				return true;
+				return interface.writeByte(0x30, 0x20)  // Noise suppression: low
+					&& interface.writeByte(0x41, 0x2d)  // Oversampling: 32X
+					&& interface.writeByte(
+						0x31,
+						0x02
+					);  // Continuous measurement @ 10Hz
 			},
 	},
 };
@@ -110,7 +124,11 @@ void MagDriver::startPolling() const {
 		return;
 	}
 
-	interface.startPolling(detectedMag->dataReg, detectedMag->dataWidth);
+	interface.startPolling(
+		detectedMag->dataReg,
+		detectedMag->dataWidth,
+		detectedMag->samplePeriod
+	);
 }
 
 void MagDriver::stopPolling() const {
@@ -127,6 +145,13 @@ const char* MagDriver::getAttachedMagName() const {
 	}
 
 	return detectedMag->name;
+}
+
+float MagDriver::getMicroTeslaPerLsb() const {
+	if (!detectedMag) {
+		return 1.0f;
+	}
+	return detectedMag->microTeslaPerLsb;
 }
 
 }  // namespace SlimeVR::Sensors::SoftFusion

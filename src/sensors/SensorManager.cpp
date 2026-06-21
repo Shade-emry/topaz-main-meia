@@ -66,6 +66,39 @@ void SensorManager::postSetup() {
 	}
 }
 
+void SensorManager::beginStartupCalibration() {
+	for (auto& sensor : m_Sensors) {
+		if (sensor->isWorking()) {
+			sensor->beginStartupCalibration();
+		}
+	}
+}
+
+bool SensorManager::hasEnabledMagnetometer() const {
+	for (const auto& sensor : m_Sensors) {
+		if (sensor->isWorking() && sensor->hasEnabledMagnetometer()) {
+			return true;
+		}
+	}
+	return false;
+}
+
+void SensorManager::setMagneticReference(float norm, float dipRadians) {
+	for (auto& sensor : m_Sensors) {
+		if (sensor->isWorking() && sensor->hasEnabledMagnetometer()) {
+			sensor->setMagneticReference(norm, dipRadians);
+		}
+	}
+}
+
+void SensorManager::clearMagneticReference() {
+	for (auto& sensor : m_Sensors) {
+		if (sensor->isWorking()) {
+			sensor->clearMagneticReference();
+		}
+	}
+}
+
 void SensorManager::update() {
 	// Gather IMU data
 	bool allIMUGood = true;
@@ -105,7 +138,7 @@ void SensorManager::update() {
 	bool shouldSend = false;
 	bool allSensorsReady = true;
 	for (auto& sensor : m_Sensors) {
-		if (!sensor->isWorking()) {
+		if (!sensor->isWorking() || !sensor->isStartupReady()) {
 			continue;
 		}
 		if (sensor->hasNewDataToSend()) {
@@ -131,7 +164,7 @@ void SensorManager::update() {
 #endif
 
 	for (auto& sensor : m_Sensors) {
-		if (sensor->isWorking()) {
+		if (sensor->isWorking() && sensor->isStartupReady()) {
 			sensor->sendData();
 		}
 	}

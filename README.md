@@ -1,124 +1,371 @@
-# SlimeVR Tracker firmware for ESP
+# SlimeVR ICM-45686 Tracker Firmware
 
-Firmware for ESP8266 / ESP32 microcontrollers and different IMU sensors to use them as a vive-like trackers in VR.
+This repository is a customized fork of
+[SlimeVR-Tracker-ESP](https://github.com/SlimeVR/SlimeVR-Tracker-ESP) for a
+LOLIN C3 Mini tracker using one TDK InvenSense ICM-45686.
 
-Requires [SlimeVR Server](https://github.com/SlimeVR/SlimeVR-Server) to work with SteamVR and resolve pose. Should be compatible with [owoTrack](https://github.com/abb128/owo-track-driver), but is not guaranteed.
+It retains the normal SlimeVR networking and tracker framework while adding a
+dedicated high-rate ICM-45686 configuration, persistent sensor calibration,
+gyro temperature compensation, timestamp-aware VQF fusion, VR-safe magnetic
+disturbance handling, and optional NOAA WMMHR/WMM magnetic references.
 
-## Configuration
+The firmware requires
+[SlimeVR Server](https://github.com/SlimeVR/SlimeVR-Server) for body tracking
+and SteamVR integration.
 
-Firmware configuration is located in the `defines.h` file. For more information on how to configure your firmware, refer to the [Configuring the firmware project section of SlimeVR documentation](https://docs.slimevr.dev/firmware/configuring-project.html).
+## Target Hardware
 
-## Compatibility
+- Board: LOLIN C3 Mini
+- MCU: ESP32-C3
+- Primary IMU: one ICM-45686
+- External/secondary IMUs: disabled
+- External IMU clock: disabled
+- IMU SDA: GPIO 5
+- IMU SCL: GPIO 4
+- IMU interrupt: GPIO 6
 
-The following IMUs and their corresponding `IMU` values are supported by the firmware:
-* BNO085 & BNO086 (IMU_BNO085)
-  * Using any fusion in internal DMP. Best results with ARVR Stabilized Game Rotation Vector or ARVR Stabilized Rotation Vector if in good magnetic environment.
-* BNO080 (IMU_BNO080)
-  * Using any fusion in internal DMP. Doesn't have BNO085's ARVR stabilization, but still gives good results.
-* MPU-6500 (IMU_MPU6500) & MPU-6050 (IMU_MPU6050)
-  * Using internal DMP to fuse Gyroscope and Accelerometer. Can drift substantially.
-  * NOTE: Currently the MPU will auto calibrate when powered on. You *must* place it on the ground and *DO NOT* move it until calibration is complete (for a few seconds). **LED on the ESP will blink 5 times after calibration is over.**
-* BNO055 (IMU_BNO055)
-  * Performs much worse than BNO080, despite having the same hardware. Not recommended for use.
-* MPU-9250 (IMU_MPU9250)
-  * Using Mahony sensor fusion of Gyroscope, Magnetometer and Accelerometer, requires good magnetic environment.
-  * See *Sensor calibration* below for info on calibrating this sensor.
-  * Specify `IMU_MPU6500` in your `defines.h` to use without magnetometer in 6DoF mode.
-  * Experimental support!
-* BMI160 (IMU_BMI160)
-  * Using sensor fusion of Gyroscope and Accelerometer.
-  * **See Sensor calibration** below for info on calibrating this sensor.
-  * Calibration file format is unstable and may not be able to load using newer firmware versions.
-  * Experimental support!
-  * Support for the following magnetometers is implemented (even more experimental): HMC5883L, QMC5883L.
-* ICM-20948 (IMU_ICM20948)
-  * Using fusion in internal DMP for 6Dof or 9DoF, 9DoF mode requires good magnetic environment.
-  * Comment out `USE_6DOF` in `debug.h` for 9DoF mode.
-  * Experimental support!
-* BMI270 (IMU_BMI270), ICM-42688 (IMU_ICM42688), LSM6DS3TR-C (IMU_LSM6DS3TRC), LSM6DSV (IMU_LSM6DSV), LSM6DSO (IMU_LSM6DSO), LSM6DSR (IMU_LSM6DSR), MPU-6050 (IMU_MPU6050_SF)
-  * Using common code: SoftFusionSensor for sensor fusion of Gyroscope and Accelerometer.
-  * Gyro&Accel sample rate, gyroscope offset and 6-side accelerometer calibration supported.
-  * In case of BMI270, gyroscope sensitivity auto-calibration (CRT) is additionally performed.
-  * Support for magnetometers is currently not implemented.
-  * VERY experimental support!
+The board definition is in `board-defaults.json`.
 
-Firmware can work with both ESP8266 and ESP32. Please edit `defines.h` and set your pinout properly according to how you connected the IMU.
+## Major Differences from Standard SlimeVR Firmware
 
-## Sensor calibration
+### ICM-45686 Configuration
 
-*It is generally recommended to turn trackers on and let them lay down on a flat surface for a few seconds.** This will calibrate them better.
+The ICM-45686 driver is configured specifically for low-latency VR motion:
 
-**Some trackers require special calibration steps on startup:**
-### MPU-9250
-  * Turn them on with chip facing down. Flip up and put on a surface for a couple of seconds, the LED will light up.
-  * After a few blinks, the LED will light up again
-  * Slowly rotate the tracker in an 8-motion facing different directions for about 30 seconds, while LED is blinking
-  * LED will turn off when calibration is complete
-  * You don't have to calibrate next time you power it on, calibration values will be saved for the next use
+- 400 Hz gyroscope output data rate
+- 400 Hz accelerometer output data rate
+- ODR/4 gyro and accelerometer low-pass filters
+- Approximately 100 Hz filter bandwidth
+- Hardware anti-alias FIR filtering
+- Internal sensor clock operation
+- Sensor timestamp-based sample timing
+- Explicit gyro and accelerometer filter-register configuration
 
-### BMI160
+This replaces the earlier approximately 51.2 Hz gyro and 25.6 Hz
+accelerometer bandwidth profile, which was overly restrictive for rapid VR
+motion.
 
-  If you have any problems with this procedure, connect the device via USB and open the serial console to check for any warnings or errors that may indicate hardware problems.
+### Timestamp-Aware VQF Fusion
 
-  - **Step 0: Power up with the chip facing down.** Or press the reset/reboot button.
+VQF was extended with:
 
-    > The LED will be lit continuously. If you have the tracker connected via USB and open the serial console, you will see text prompts in addition to the LEDs. You can only calibrate 1 IMU at a time.
+- Measured sample timing instead of assuming a perfectly constant loop period
+- Timestamp-aware gyro, accelerometer, and magnetometer updates
+- Variable sample-period handling
+- Persistent magnetic-disturbance rejection
+- Rate-limited yaw recovery
+- Smooth gyro-dominated fallback while magnetic data is rejected
+- Gyro pre-bias transfer without resetting the quaternion
 
-    Flip it back up while the LED is still solid. Wait a few seconds, do not touch the device.
-    
-  - **Step 1: It will flash 3 times when gyroscope calibration begins.**
+Magnetic recovery is deliberately gradual. A disturbed magnetometer should not
+cause the tracker to snap or quickly follow a bad heading.
 
-    > If done incorrectly, this step is the most likely source of constant drift.
+### Gyroscope Bias Calibration
 
-    Make sure the tracker does not move or vibrate for 5 seconds - still do not touch it.
+The gyro calibration pipeline now provides:
 
-  - **Step 2: It will flash 6 times when accelerometer calibration begins.**
+- A stationary startup gyro-bias check
+- Persistent gyro bias values
+- VQF rest detection for safe runtime learning
+- Protection against learning bias while the tracker is moving
+- Smooth bias-state updates without resetting orientation
 
-    > The accelerometer calibration process requires you to **hold the device in 6 unique orientations** (e.g. sides of a cube),
-    > keep it still, and not hold or touch for 3 seconds each. It uses gravity as a reference and automatically detects when it is stabilized - this process is not time-sensitive.
+### Persistent Gyro Temperature Curve
 
-    > If you are unable to keep it on a flat surface without touching, press the device against a wall, it does not have to be absolutely perfect.
+The firmware can build and save a long-term gyro temperature-compensation
+curve:
 
-    **There will be two very short blinks when each position is recorded.**
-    
-    Rotate the device 90 or 180 degrees in any direction. It should be on a different side each time. Continue to rotate until all 6 sides have been recorded.
-    
-    The last position has a long flash when recorded, indicating exit from calibration mode.
+- Range: 15–45 °C
+- Resolution: 1 °C bins
+- Approximately five seconds of stationary data per accepted bin
+- Moving samples are rejected
+- Repeated observations are averaged
+- Missing temperatures are interpolated between nearby saved points
+- Values outside the acquired range use the nearest endpoint
+- Accepted points are saved to flash
+- The curve does not need to be collected again at every startup
+- Serial messages report acquisition, accepted points, saves, and completion
 
-  #### Additional info for BMI160
-  - For best results, **calibrate when the trackers are warmed up** - put them on for a few minutes,
-    wait for the temperature to stabilize at 30-40 degrees C, then calibrate.
-    Enable developer mode in SlimeVR settings to see tracker temperature.
+Temperature compensation should reduce warm-up and temperature-related gyro
+drift, but it cannot eliminate every mechanical, electrical, or fusion-related
+source of drift.
 
-  - There is a legacy accelerometer calibration method that collects data during in-place rotation by holding it in hand instead.
-    If you are absolutely unable to use the default 6-point calibration method, you can switch it in config file `defines_bmi160.h`.
+### Six-Side Accelerometer Calibration
 
-  - For faster recalibration, you disable accelerometer calibration by setting `BMI160_ACCEL_CALIBRATION_METHOD` option to `ACCEL_CALIBRATION_METHOD_SKIP` in `defines_bmi160.h`.
-    Accelerometer calibration can be safely skipped if you don't have issues with pitch and roll.
-    You can check it by enabling developer mode in SlimeVR settings (*General / Interface*) and going back to the *"Home"* tab.
-    Press *"Preview"* button inside the tracker settings (of each tracker) to show the IMU visualizer.
-    Check if pitch/roll resembles its real orientation.
+Accelerometer calibration collects all six gravity directions:
 
-  - Calibration data is written to the flash of your MCU and is unique for each BMI160, keep that in mind if you have detachable aux trackers.
+- +X and -X
+- +Y and -Y
+- +Z and -Z
 
-## Uploading On Linux
+The resulting calibration contains both a zero offset and scale correction for
+each axis. Valid results are saved and reused on later boots.
 
-Follow the instructions in this link [PlatformIO](https://docs.platformio.org/en/latest//faq.html#platformio-udev-rules), this should solve any permission denied errors
+### Magnetometer Calibration and Disturbance Handling
 
+The magnetometer pipeline now includes:
 
-## Contributions
-Any contributions submitted for inclusion in this repository will be dual-licensed under
-either:
+- Persistent calibration values
+- First-start calibration when no valid values are stored
+- Raw-count conversion to microtesla
+- Magnetic-field strength and inclination diagnostics
+- Environmental-change reset support
+- Extended disturbance rejection in VQF
+
+Recalibrate the magnetometer after moving to a substantially different
+play space or after changing nearby furniture, electronics, steel objects, or
+other sources of magnetic distortion.
+
+## NOAA WMMHR and WMM Support
+
+The optional geomagnetic service obtains the expected local Earth magnetic
+field using an approximate IP-derived location or a manually configured
+location.
+
+The fallback order is:
+
+```text
+NOAA WMMHR
+→ cached WMMHR
+→ NOAA WMM
+→ cached WMM
+→ ordinary calibrated magnetometer
+```
+
+Features include:
+
+- IP-based approximate location lookup at startup
+- Saved last-known location
+- Manual latitude, longitude, and altitude
+- NOAA World Magnetic Model High Resolution (WMMHR)
+- Standard NOAA World Magnetic Model (WMM) fallback
+- Cached model results
+- Expected magnetic-field strength and inclination supplied to VQF
+
+### WMM Modes
+
+- `OFF`: WMM is completely ignored.
+- `MONITOR`: WMM data is obtained and reported but does not affect fusion.
+- `ON`: WMM field strength and inclination supplement magnetometer validation.
+
+`MONITOR` is the default for initial testing.
+
+True-north yaw correction is intentionally disabled. WMM currently helps
+decide whether the measured magnetic field is trustworthy; it does not forcibly
+rotate the tracker toward geographic north.
+
+IP location lookup reveals the tracker's public IP address to the configured
+location service. Use manual location or turn automatic location off if this is
+not desired.
+
+## Startup and Calibration Sequence
+
+On startup, the firmware:
+
+1. Initializes the ICM-45686.
+2. Waits for the configured network-resolution period.
+3. Attempts IP location and NOAA WMMHR/WMM resolution.
+4. Falls back to cached model and location data if necessary.
+5. Checks saved sensor-calibration records.
+6. Runs accelerometer and magnetometer calibration only if valid values are
+   missing.
+7. Performs a stationary gyro-bias check.
+8. Enables normal tracker output after startup requirements are satisfied.
+
+Fusion can collect internal calibration data during startup, but incomplete
+startup calibration is not sent as normal tracker orientation output.
+
+## First-Flash Preparation
+
+### NOAA API Key
+
+Copy the example secrets file:
+
+```powershell
+Copy-Item src\secrets.example.h src\secrets.local.h
+```
+
+Open `src/secrets.local.h` and set `NOAA_GEOMAG_API_KEY` to the key supplied
+for flashing.
+
+`src/secrets.local.h` is excluded from Git. Do not commit a private API key.
+The firmware still builds without a key, but online NOAA requests will be
+unavailable and the fallback pipeline will use cached or ordinary magnetometer
+data.
+
+### Build Environment
+
+From the repository directory:
+
+```powershell
+$env:PYTHONPATH='C:\Users\JDesM\Documents\Codex\2026-06-20\c\work\.platformio-tool'
+$env:PLATFORMIO_CORE_DIR='C:\Users\JDesM\Documents\Codex\2026-06-20\c\p'
+$pio='C:\Users\JDesM\AppData\Local\Python\bin\python.exe'
+```
+
+Build the LOLIN C3 Mini firmware:
+
+```powershell
+& $pio -m platformio run -e BOARD_LOLIN_C3_MINI -j 1
+```
+
+The verified development build used approximately:
+
+- 11.3% of available RAM
+- 42.7% of the custom application partition
+
+## No-OTA Partition Layout
+
+This fork uses `partitions_lolin_c3_no_ota.csv`:
+
+- The second OTA application partition is removed.
+- The main firmware partition is larger.
+- NVS, LittleFS, and crash-dump storage are retained.
+- Wireless Arduino OTA support is disabled.
+
+The first installation must erase the old partition layout. This erases
+existing Wi-Fi settings and sensor calibrations:
+
+```powershell
+& $pio -m platformio run -e BOARD_LOLIN_C3_MINI -t erase
+& $pio -m platformio run -e BOARD_LOLIN_C3_MINI -t upload
+```
+
+Future ordinary firmware uploads normally require only:
+
+```powershell
+& $pio -m platformio run -e BOARD_LOLIN_C3_MINI -t upload
+```
+
+Open the serial console with:
+
+```powershell
+& $pio -m platformio device monitor -b 115200
+```
+
+PlatformIO normally detects the serial port automatically. A port can be
+specified explicitly if necessary.
+
+## Serial Command Cheat Sheet
+
+### WMM and Location
+
+```text
+WMM STATUS
+WMM MONITOR
+WMM ON
+WMM OFF
+WMM REFRESH
+WMM LOCATION
+WMM SET-LOCATION <latitude> <longitude> [altitude-km]
+WMM CLEAR-LOCATION
+WMM AUTO-LOCATION ON
+WMM AUTO-LOCATION OFF
+WMM MODEL AUTO
+WMM MODEL WMMHR
+WMM MODEL WMM
+WMM CLEAR-CACHE
+```
+
+Begin testing in `WMM MONITOR`. Confirm that the location, expected field
+strength, inclination, measured field, and disturbance reporting are sensible
+before using `WMM ON`.
+
+### Sensor Calibration
+
+```text
+CALIBRATION
+CALIBRATE GYRO
+CALIBRATE ACCEL
+CALIBRATE MAG
+CALIBRATE CANCEL
+```
+
+The tracker must remain still during gyro calibration. Follow the serial
+instructions during six-side accelerometer and magnetometer calibration.
+
+### Gyro Temperature Curve
+
+```text
+TEMPCAL START
+TEMPCAL STOP
+TEMPCAL STATUS
+TEMPCAL PRINT
+TEMPCAL SAVE
+TEMPCAL CLEAR
+TEMPCAL LEARN ON
+TEMPCAL LEARN OFF
+```
+
+Temperature points are accepted only while the tracker is stationary. The
+tracker may be used normally between points, but movement delays acquisition.
+
+### Diagnostics
+
+```text
+IMU STATUS
+IMU DIAGNOSTICS
+MAG ENVIRONMENT RESET
+```
+
+Use `MAG ENVIRONMENT RESET` after a significant play-space or magnetic
+environment change, then rerun magnetometer calibration if needed.
+
+## Current Validation Status
+
+The firmware has successfully compiled for:
+
+- `BOARD_LOLIN_C3_MINI`
+- `BOARD_WEMOSD1MINI` as a compatibility check
+
+Compile success does not replace hardware validation. Before regular VR use,
+verify:
+
+- ICM-45686 detection and interrupt operation
+- Actual sensor axis orientation
+- First-start calibration prompts
+- Magnetometer units and calibration quality
+- NOAA response parsing and TLS connectivity
+- WMM monitor values
+- Temperature-curve acquisition
+- Long-session yaw and gyro drift
+- Behavior near deliberate magnetic disturbances
+
+## Important Source Files
+
+- `src/sensors/softfusion/drivers/icm45base.h`
+- `src/sensors/softfusion/drivers/icm45686.h`
+- `lib/vqf/vqf.h`
+- `lib/vqf/vqf.cpp`
+- `src/magnetic/WmmService.h`
+- `src/magnetic/WmmService.cpp`
+- `src/motionprocessing/GyroTemperatureCalibrator.h`
+- `src/motionprocessing/GyroTemperatureCalibrator.cpp`
+- `src/sensors/softfusion/runtimecalibration/`
+- `src/serial/serialcommands.cpp`
+- `src/debug.h`
+- `partitions_lolin_c3_no_ota.csv`
+
+## Upstream Project
+
+This project is based on
+[SlimeVR-Tracker-ESP](https://github.com/SlimeVR/SlimeVR-Tracker-ESP).
+General SlimeVR documentation is available at
+[docs.slimevr.dev](https://docs.slimevr.dev/).
+
+## Contributions and Licensing
+
+Contributions submitted for inclusion in this repository are dual-licensed
+under either:
 
 - MIT License ([LICENSE-MIT](/LICENSE-MIT))
 - Apache License, Version 2.0 ([LICENSE-APACHE](/LICENSE-APACHE))
 
-Unless you explicitly state otherwise, any contribution intentionally submitted for
-inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual
-licensed as above, without any additional terms or conditions.
+Unless explicitly stated otherwise, any contribution intentionally submitted
+for inclusion in the work is dual-licensed as described above without
+additional terms or conditions.
 
-You also certify that the code you have used is compatible with those licenses or is
-authored by you. If you're doing so on your work time, you certify that your employer is
-okay with this and that you are authorized to provide the above licenses.
+Contributors certify that submitted code is compatible with these licenses or
+authored by them and that they are authorized to provide it under these terms.
 
-For an explanation on how to contribute, see [`CONTRIBUTING.md`](CONTRIBUTING.md)
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for contribution guidance.

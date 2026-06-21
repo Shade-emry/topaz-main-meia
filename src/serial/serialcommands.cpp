@@ -28,6 +28,7 @@
 #include "GlobalVars.h"
 #include "base64.hpp"
 #include "batterymonitor.h"
+#include "calibration.h"
 #include "logging/Logger.h"
 #include "utils.h"
 
@@ -36,7 +37,7 @@
 #endif
 
 #ifdef EXT_SERIAL_COMMANDS
-#define CALLBACK_SIZE 7  // Increase callback size to allow for debug commands
+#define CALLBACK_SIZE 16  // Calibration, WMM, and diagnostics commands
 #include "i2cscan.h"
 #endif
 
@@ -445,6 +446,170 @@ void cmdTemperatureCalibration(CmdParser* parser) {
 	);
 }
 
+void cmdTempCurve(CmdParser* parser) {
+	if (parser->getParamCount() < 2) {
+		logger.info(
+			"Usage: TEMPCAL START|STOP|STATUS|PRINT|SAVE|CLEAR|LEARN ON|OFF"
+		);
+		return;
+	}
+	if (parser->equalCmdParam(1, "START")) {
+		for (auto& sensor : sensorManager.getSensors()) {
+			sensor->startTemperatureCalibration();
+		}
+	} else if (parser->equalCmdParam(1, "STOP")) {
+		for (auto& sensor : sensorManager.getSensors()) {
+			sensor->stopTemperatureCalibration();
+		}
+	} else if (parser->equalCmdParam(1, "STATUS")) {
+		for (auto& sensor : sensorManager.getSensors()) {
+			sensor->printTemperatureCalibrationState();
+		}
+	} else if (parser->equalCmdParam(1, "PRINT")) {
+		for (auto& sensor : sensorManager.getSensors()) {
+			sensor->printDebugTemperatureCalibrationState();
+		}
+	} else if (parser->equalCmdParam(1, "SAVE")) {
+		for (auto& sensor : sensorManager.getSensors()) {
+			sensor->saveTemperatureCalibration();
+		}
+	} else if (parser->equalCmdParam(1, "CLEAR")) {
+		for (auto& sensor : sensorManager.getSensors()) {
+			sensor->clearTemperatureCalibration();
+		}
+	} else if (parser->equalCmdParam(1, "LEARN")
+			   && parser->getParamCount() >= 3) {
+		const bool enabled = parser->equalCmdParam(2, "ON");
+		if (!enabled && !parser->equalCmdParam(2, "OFF")) {
+			logger.info("Usage: TEMPCAL LEARN ON|OFF");
+			return;
+		}
+		for (auto& sensor : sensorManager.getSensors()) {
+			sensor->setBackgroundTemperatureCalibration(enabled);
+		}
+	} else {
+		logger.info(
+			"Usage: TEMPCAL START|STOP|STATUS|PRINT|SAVE|CLEAR|LEARN ON|OFF"
+		);
+	}
+}
+
+void cmdWmm(CmdParser* parser) {
+	using namespace SlimeVR::Magnetic;
+	if (parser->getParamCount() < 2) {
+		wmmService.printStatus();
+		return;
+	}
+	if (parser->equalCmdParam(1, "ON")) {
+		wmmService.setMode(WmmMode::On);
+		wmmService.refresh();
+	} else if (parser->equalCmdParam(1, "OFF")) {
+		wmmService.setMode(WmmMode::Off);
+	} else if (parser->equalCmdParam(1, "MONITOR")) {
+		wmmService.setMode(WmmMode::Monitor);
+		wmmService.refresh();
+	} else if (parser->equalCmdParam(1, "STATUS")) {
+		wmmService.printStatus();
+	} else if (parser->equalCmdParam(1, "REFRESH")) {
+		wmmService.refresh();
+	} else if (parser->equalCmdParam(1, "LOCATION")) {
+		wmmService.printLocation();
+	} else if (parser->equalCmdParam(1, "SET-LOCATION")
+			   && parser->getParamCount() >= 4) {
+		const double latitude = strtod(parser->getCmdParam(2), nullptr);
+		const double longitude = strtod(parser->getCmdParam(3), nullptr);
+		const float altitude = parser->getParamCount() >= 5
+								 ? strtof(parser->getCmdParam(4), nullptr)
+								 : 0.0f;
+		wmmService.setManualLocation(latitude, longitude, altitude);
+	} else if (parser->equalCmdParam(1, "CLEAR-LOCATION")) {
+		wmmService.clearLocation();
+	} else if (parser->equalCmdParam(1, "AUTO-LOCATION")
+			   && parser->getParamCount() >= 3) {
+		if (parser->equalCmdParam(2, "ON")) {
+			wmmService.setAutoLocation(true);
+		} else if (parser->equalCmdParam(2, "OFF")) {
+			wmmService.setAutoLocation(false);
+		} else {
+			logger.info("Usage: WMM AUTO-LOCATION ON|OFF");
+		}
+	} else if (parser->equalCmdParam(1, "MODEL")
+			   && parser->getParamCount() >= 3) {
+		if (parser->equalCmdParam(2, "AUTO")) {
+			wmmService.setModel(WmmModel::Auto);
+		} else if (parser->equalCmdParam(2, "WMMHR")) {
+			wmmService.setModel(WmmModel::WmmHr);
+		} else if (parser->equalCmdParam(2, "WMM")) {
+			wmmService.setModel(WmmModel::Wmm);
+		} else {
+			logger.info("Usage: WMM MODEL AUTO|WMMHR|WMM");
+		}
+	} else if (parser->equalCmdParam(1, "CLEAR-CACHE")) {
+		wmmService.clearCache();
+	} else {
+		logger.info(
+			"Usage: WMM ON|OFF|MONITOR|STATUS|REFRESH|LOCATION|SET-LOCATION "
+			"<lat> <lon> [alt-km]|CLEAR-LOCATION|AUTO-LOCATION ON|OFF|MODEL "
+			"AUTO|WMMHR|WMM|CLEAR-CACHE"
+		);
+	}
+}
+
+void cmdCalibrate(CmdParser* parser) {
+	if (parser->getParamCount() < 2) {
+		logger.info("Usage: CALIBRATE GYRO|ACCEL|MAG|CANCEL");
+		return;
+	}
+	for (auto& sensor : sensorManager.getSensors()) {
+		if (parser->equalCmdParam(1, "GYRO")) {
+			sensor->startCalibration(CALIBRATION_TYPE_INTERNAL_GYRO);
+		} else if (parser->equalCmdParam(1, "ACCEL")) {
+			sensor->startCalibration(CALIBRATION_TYPE_INTERNAL_ACCEL);
+		} else if (parser->equalCmdParam(1, "MAG")) {
+			sensor->startCalibration(CALIBRATION_TYPE_INTERNAL_MAG);
+		} else if (parser->equalCmdParam(1, "CANCEL")) {
+			sensor->cancelCalibration();
+		} else {
+			logger.info("Usage: CALIBRATE GYRO|ACCEL|MAG|CANCEL");
+			return;
+		}
+	}
+}
+
+void cmdCalibrationStatus(CmdParser*) {
+	for (auto& sensor : sensorManager.getSensors()) {
+		sensor->printCalibrationStatus();
+	}
+}
+
+void cmdImu(CmdParser* parser) {
+	if (parser->getParamCount() >= 2
+		&& (parser->equalCmdParam(1, "STATUS")
+			|| parser->equalCmdParam(1, "DIAGNOSTICS"))) {
+		printState();
+		wmmService.printStatus();
+		for (auto& sensor : sensorManager.getSensors()) {
+			sensor->printCalibrationStatus();
+			sensor->printTemperatureCalibrationState();
+		}
+		return;
+	}
+	logger.info("Usage: IMU STATUS|DIAGNOSTICS");
+}
+
+void cmdMag(CmdParser* parser) {
+	if (parser->getParamCount() >= 3
+		&& parser->equalCmdParam(1, "ENVIRONMENT")
+		&& parser->equalCmdParam(2, "RESET")) {
+		sensorManager.clearMagneticReference();
+		logger.info(
+			"[MAG] Local magnetic reference reset; calibration matrix was preserved"
+		);
+		return;
+	}
+	logger.info("Usage: MAG ENVIRONMENT RESET");
+}
+
 void cmdDeleteCalibration(CmdParser* parser) {
 	logger.info("ERASE CALIBRATION");
 
@@ -465,6 +630,12 @@ void setUp() {
 	cmdCallbacks.addCmd("REBOOT", &cmdReboot);
 	cmdCallbacks.addCmd("DELCAL", &cmdDeleteCalibration);
 	cmdCallbacks.addCmd("TCAL", &cmdTemperatureCalibration);
+	cmdCallbacks.addCmd("TEMPCAL", &cmdTempCurve);
+	cmdCallbacks.addCmd("WMM", &cmdWmm);
+	cmdCallbacks.addCmd("CALIBRATE", &cmdCalibrate);
+	cmdCallbacks.addCmd("CALIBRATION", &cmdCalibrationStatus);
+	cmdCallbacks.addCmd("IMU", &cmdImu);
+	cmdCallbacks.addCmd("MAG", &cmdMag);
 #if EXT_SERIAL_COMMANDS
 	cmdCallbacks.addCmd("SCANI2C", &cmdScanI2C);
 #endif
